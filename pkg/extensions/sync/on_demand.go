@@ -53,22 +53,19 @@ func (onDemand *BaseOnDemand) SyncImage(ctx context.Context, repo, reference str
 		onDemand.log.Info().Str("repo", repo).Str("reference", reference).
 			Msg("image already demanded, waiting on channel")
 
-		syncResult, _ := val.(chan error)
+		done, _ := val.(chan struct{})
+		<-done
 
-		err, ok := <-syncResult
-		// if channel closed exit
-		if !ok {
-			return nil
-		}
-
-		return err
+		return nil
 	}
 
 	syncResult := make(chan error)
-	onDemand.requestStore.Store(req, syncResult)
+	done := make(chan struct{})
+	onDemand.requestStore.Store(req, done)
 
 	defer onDemand.requestStore.Delete(req)
 	defer close(syncResult)
+	defer close(done)
 
 	go onDemand.syncImage(ctx, repo, reference, syncResult)
 
@@ -93,22 +90,19 @@ func (onDemand *BaseOnDemand) SyncReferrers(ctx context.Context, repo string,
 		onDemand.log.Info().Str("repo", repo).Str("reference", subjectDigestStr).
 			Msg("referrers for image already demanded, waiting on channel")
 
-		syncResult, _ := val.(chan error)
+		done, _ := val.(chan struct{})
+		<-done
 
-		err, ok := <-syncResult
-		// if channel closed exit
-		if !ok {
-			return nil
-		}
-
-		return err
+		return nil
 	}
 
 	syncResult := make(chan error)
-	onDemand.requestStore.Store(req, syncResult)
+	done := make(chan struct{})
+	onDemand.requestStore.Store(req, done)
 
 	defer onDemand.requestStore.Delete(req)
 	defer close(syncResult)
+	defer close(done)
 
 	go onDemand.syncReferrers(ctx, repo, subjectDigestStr, referenceTypes, syncResult)
 
