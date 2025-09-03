@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strconv"
 	"strings"
@@ -144,9 +145,9 @@ func (service *BaseService) init() error {
 	service.clientLock.Lock()
 	defer service.clientLock.Unlock()
 
-	client, hosts, err := newClient(service.config, service.credentials)
+	client, hosts, err := newClient(service.config, service.credentials, service.log)
 	if err != nil {
-		service.log.Err(err).Msg("failed to parse sync config urls")
+		service.log.Err(err).Msg("failed to create registry client")
 
 		return err
 	}
@@ -783,7 +784,7 @@ func getTLSConfigOption(url *url.URL, tlsVerify *bool) config.TLSConf {
 	return tls
 }
 
-func newClient(opts syncconf.RegistryConfig, credentials syncconf.CredentialsFile,
+func newClient(opts syncconf.RegistryConfig, credentials syncconf.CredentialsFile, logger log.Logger,
 ) (*regclient.RegClient, []config.Host, error) {
 	urls, err := parseRegistryURLs(opts.URLs)
 	if err != nil {
@@ -875,6 +876,7 @@ func newClient(opts syncconf.RegistryConfig, credentials syncconf.CredentialsFil
 		regclient.WithDockerCreds(),
 		regclient.WithRegOpts(regOpts...),
 		regclient.WithConfigHost(hostConfigOpts...),
+		regclient.WithSlog(slog.New(log.NewHandler(logger))),
 	)
 
 	return client, hostConfigOpts, nil
