@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/containerd/platforms"
 	godigest "github.com/opencontainers/go-digest"
 	"github.com/regclient/regclient"
 	"github.com/regclient/regclient/config"
@@ -139,7 +140,7 @@ func New(
 	}
 
 	for _, p := range config.Platforms {
-		_, err = platform.Parse(p)
+		_, err = platforms.Parse(p)
 		if err != nil {
 			return nil, err
 		}

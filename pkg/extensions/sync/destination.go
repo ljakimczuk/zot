@@ -288,12 +288,14 @@ func (registry *DestinationRegistry) copyManifest(repo string, desc ispec.Descri
 				for only the platforms that got copied are on the list and hence get
 				validated.
 
-				However this changes the digest, and manifest still would not be
-				served from storage due failing on comparison to digest known to
-				upstream registry.
+				However, filtering out manifests changes the manifest index digest,
+				and hence it still would not be served from the cache due to failing
+				on comparison to the digest known to an upstream registry (in the step
+				that checks if image can be skipped on syncing).
 
 				Hence in addition original digest gets preserved in the
-				`dev.zotregistry.image.original-digest` annotation for comparisons.
+				`dev.zotregistry.image.original-digest` annotation for later comparisons.
+				It is to be used instead of the new digest of "partial" index manifest.
 			*/
 
 			indexManifest.Manifests = filteredManifests
