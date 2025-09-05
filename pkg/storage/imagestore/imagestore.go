@@ -20,6 +20,7 @@ import (
 	ispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	zerr "zotregistry.dev/zot/errors"
+	"zotregistry.dev/zot/pkg/api/constants"
 	zcommon "zotregistry.dev/zot/pkg/common"
 	"zotregistry.dev/zot/pkg/compat"
 	"zotregistry.dev/zot/pkg/extensions/events"
@@ -531,7 +532,12 @@ func (is *ImageStore) GetImageManifest(repo, reference string) ([]byte, godigest
 		return nil, "", "", err
 	}
 
-	return buf, manifestDesc.Digest, manifestDesc.MediaType, nil
+	origDigest := manifestDesc.Digest
+	if v, ok := manifest.Annotations[constants.OriginalDigestAnnotation]; ok {
+		origDigest = godigest.Digest(v)
+	}
+
+	return buf, origDigest, manifestDesc.MediaType, nil
 }
 
 // PutImageManifest adds an image manifest to the repository.

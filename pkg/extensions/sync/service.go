@@ -115,7 +115,7 @@ func New(
 
 	if len(tmpDir) == 0 {
 		// first it will sync in tmpDir then it will move everything into local ImageStore
-		service.destination = NewDestinationRegistry(storeController, storeController, metadb, log)
+		service.destination = NewDestinationRegistry(storeController, storeController, metadb, log, service.config.Platforms)
 	} else {
 		// first it will sync under /rootDir/reponame/.sync/ then it will move everything into local ImageStore
 		service.destination = NewDestinationRegistry(
@@ -125,6 +125,7 @@ func New(
 			},
 			metadb,
 			log,
+			service.config.Platforms,
 		)
 	}
 
@@ -135,6 +136,13 @@ func New(
 		log.Err(err).Msg("failed to initialize sync client")
 
 		return nil, err
+	}
+
+	for _, p := range config.Platforms {
+		_, err = platform.Parse(p)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return service, nil
@@ -465,6 +473,10 @@ func (service *BaseService) syncRef(ctx context.Context, localRepo string, remot
 	copyOpts := []regclient.ImageOpts{}
 	if recursive {
 		copyOpts = append(copyOpts, regclient.ImageWithReferrers())
+	}
+
+	if len(service.config.Platforms) > 0 {
+		copyOpts = append(copyOpts, regclient.ImageWithPlatforms(service.config.Platforms))
 	}
 
 	// check if image is already synced

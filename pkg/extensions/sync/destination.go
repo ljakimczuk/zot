@@ -12,12 +12,14 @@ import (
 	"path"
 	"strings"
 
+	"github.com/containerd/platforms"
 	godigest "github.com/opencontainers/go-digest"
 	ispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/regclient/regclient/types/mediatype"
 	"github.com/regclient/regclient/types/ref"
 
 	zerr "zotregistry.dev/zot/errors"
+	"zotregistry.dev/zot/pkg/api/constants"
 	"zotregistry.dev/zot/pkg/common"
 	"zotregistry.dev/zot/pkg/extensions/monitoring"
 	"zotregistry.dev/zot/pkg/log"
@@ -30,10 +32,11 @@ import (
 )
 
 type DestinationRegistry struct {
-	storeController storage.StoreController
-	tempStorage     OciLayoutStorage
-	metaDB          mTypes.MetaDB
-	log             log.Logger
+	storeController  storage.StoreController
+	tempStorage      OciLayoutStorage
+	metaDB           mTypes.MetaDB
+	log              log.Logger
+	desiredPlatforms map[string]struct{}
 }
 
 func NewDestinationRegistry(
@@ -42,14 +45,22 @@ func NewDestinationRegistry(
 	metaDB mTypes.MetaDB,
 	log log.Logger,
 ) Destination {
-	return &DestinationRegistry{
+
+	dstReg := &DestinationRegistry{
 		storeController: storeController,
 		tempStorage:     NewOciLayoutStorage(tempStoreController),
 		metaDB:          metaDB,
 		// first we sync from remote (using containers/image copy from docker:// to oci:) to a temp imageStore
 		// then we copy the image from tempStorage to zot's storage using ImageStore APIs
-		log: log,
+		log:             log,
+		desiredPlatforms: map[string]struct{}{},
 	}
+
+	for _, p := range desiredPlatforms{
+		dstReg.desiredPlatforms[p] = struct{}{}
+	}
+
+	return dstReg
 }
 
 // Check if image is already synced.
@@ -227,8 +238,20 @@ func (registry *DestinationRegistry) copyManifest(repo string, desc ispec.Descri
 			return err
 		}
 
+		filteredManifests := []ispec.Descriptor{}
+
 		for _, manifest := range indexManifest.Manifests {
 			reference := GetDescriptorReference(manifest)
+
+			platform := platforms.Format(*manifest.Platform)
+			if _, ok := registry.desiredPlatforms[platform]; !ok && len(registry.desiredPlatforms) > 0 {
+				registry.log.Debug().Str("repo", repo).Str("reference", reference).Str("platform", platform).
+					Msg("manifest not uploaded because platform is not on the desired list")
+
+				continue
+			}
+
+			filteredManifests = append(filteredManifests, manifest)
 
 			manifestBuf, err := tempImageStore.GetBlobContent(repo, manifest.Digest)
 			if err != nil {
@@ -252,6 +275,41 @@ func (registry *DestinationRegistry) copyManifest(repo string, desc ispec.Descri
 
 				return err
 			}
+		}
+
+		if len(filteredManifests) != len(indexManifest.Manifests) {
+			/*
+				When some platforms got filtered out on copying, keeping them in
+				the manifest index will fail validation on putting into storage.
+				And without putting into storage this manifest cannot be served from
+				cache on subsequent requests. So manifest must be put there.
+
+				That is why manifests list is modified here, to pass the validation,
+				for only the platforms that got copied are on the list and hence get
+				validated.
+
+				However this changes the digest, and manifest still would not be
+				served from storage due failing on comparison to digest known to
+				upstream registry.
+
+				Hence in addition original digest gets preserved in the
+				`dev.zotregistry.image.original-digest` annotation for comparisons.
+			*/
+
+			indexManifest.Manifests = filteredManifests
+
+			if indexManifest.Annotations == nil {
+				indexManifest.Annotations = map[string]string{}
+			}
+
+			indexManifest.Annotations[constants.OriginalDigestAnnotation] = desc.Digest.String()
+
+			newManifestContent, err := json.Marshal(indexManifest)
+			if err != nil {
+				return err
+			}
+
+			manifestContent = newManifestContent
 		}
 
 		_, _, err := imageStore.PutImageManifest(repo, reference, desc.MediaType, manifestContent)
