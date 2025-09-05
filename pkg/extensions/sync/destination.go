@@ -52,11 +52,11 @@ func NewDestinationRegistry(
 		metaDB:          metaDB,
 		// first we sync from remote (using containers/image copy from docker:// to oci:) to a temp imageStore
 		// then we copy the image from tempStorage to zot's storage using ImageStore APIs
-		log:             log,
+		log:              log,
 		desiredPlatforms: map[string]struct{}{},
 	}
 
-	for _, p := range desiredPlatforms{
+	for _, p := range desiredPlatforms {
 		dstReg.desiredPlatforms[p] = struct{}{}
 	}
 
