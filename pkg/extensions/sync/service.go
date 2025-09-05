@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/containerd/platforms"
 	godigest "github.com/opencontainers/go-digest"
 	"github.com/regclient/regclient"
 	"github.com/regclient/regclient/config"
@@ -115,7 +116,7 @@ func New(
 
 	if len(tmpDir) == 0 {
 		// first it will sync in tmpDir then it will move everything into local ImageStore
-		service.destination = NewDestinationRegistry(storeController, storeController, metadb, log)
+		service.destination = NewDestinationRegistry(storeController, storeController, metadb, log, service.config.Platforms)
 	} else {
 		// first it will sync under /rootDir/reponame/.sync/ then it will move everything into local ImageStore
 		service.destination = NewDestinationRegistry(
@@ -125,6 +126,7 @@ func New(
 			},
 			metadb,
 			log,
+			service.config.Platforms,
 		)
 	}
 
@@ -135,6 +137,51 @@ func New(
 		log.Err(err).Msg("failed to initialize sync client")
 
 		return nil, err
+	}
+
+	/*
+		Platforms specifiers get validated here by checking if they
+		match the `os/arch` format required by the OCI Specification.
+
+		This forces author of Zot configuration to specify complete
+		information, although both parsers, regclient's and containerd's,
+		allow for OS or Arch to be missing, in which case they fall back
+		to local information.
+
+		The main reason for this requirement is user experience. For someone
+		unaware of how the platforms configuration field is later used,
+		specifying only `linux` may mean any linux architecture, or specifying
+		only `amd64` may mean all operatoring systems with amd64
+		architecture. This is not true without extra logic on top of what
+		regclient seems to provide.
+
+		The other reason is more technical, the job of filtering out
+		platforms is later delegated to regclient, and regclient seems more
+		conservative on extrapolating missing information, for it adds
+		variants too. So even if `linux` alone was allowed in configuration,
+		hoping for extrapolating it to `linux/amd64` for example, it could
+		turn out the image is still not copied, for platform was extrapolated
+		to `linux/amd64/v3`.
+
+		The second reason is why containerd's parser is used here for validation.
+	*/
+	for _, pltStr := range config.Platforms {
+		pltObj, err := platforms.Parse(pltStr)
+		if err != nil {
+			log.Err(err).
+				Str("platform", pltStr).
+				Msg("parsing platform failed")
+
+			return nil, err
+		}
+
+		if platforms.Format(pltObj) != pltStr {
+			log.Err(zerr.ErrPlatformMissingOsOrArch).
+				Str("platform", pltStr).
+				Msg("platform mismatch after parsing")
+
+			return nil, zerr.ErrPlatformMissingOsOrArch
+		}
 	}
 
 	return service, nil
@@ -465,6 +512,10 @@ func (service *BaseService) syncRef(ctx context.Context, localRepo string, remot
 	copyOpts := []regclient.ImageOpts{}
 	if recursive {
 		copyOpts = append(copyOpts, regclient.ImageWithReferrers())
+	}
+
+	if len(service.config.Platforms) > 0 {
+		copyOpts = append(copyOpts, regclient.ImageWithPlatforms(service.config.Platforms))
 	}
 
 	// check if image is already synced

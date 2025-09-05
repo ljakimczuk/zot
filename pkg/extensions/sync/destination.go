@@ -12,12 +12,14 @@ import (
 	"path"
 	"strings"
 
+	"github.com/containerd/platforms"
 	godigest "github.com/opencontainers/go-digest"
 	ispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/regclient/regclient/types/mediatype"
 	"github.com/regclient/regclient/types/ref"
 
 	zerr "zotregistry.dev/zot/errors"
+	"zotregistry.dev/zot/pkg/api/constants"
 	"zotregistry.dev/zot/pkg/common"
 	"zotregistry.dev/zot/pkg/extensions/monitoring"
 	"zotregistry.dev/zot/pkg/log"
@@ -30,10 +32,11 @@ import (
 )
 
 type DestinationRegistry struct {
-	storeController storage.StoreController
-	tempStorage     OciLayoutStorage
-	metaDB          mTypes.MetaDB
-	log             log.Logger
+	storeController  storage.StoreController
+	tempStorage      OciLayoutStorage
+	metaDB           mTypes.MetaDB
+	log              log.Logger
+	desiredPlatforms map[string]struct{}
 }
 
 func NewDestinationRegistry(
@@ -42,14 +45,22 @@ func NewDestinationRegistry(
 	metaDB mTypes.MetaDB,
 	log log.Logger,
 ) Destination {
-	return &DestinationRegistry{
+
+	dstReg := &DestinationRegistry{
 		storeController: storeController,
 		tempStorage:     NewOciLayoutStorage(tempStoreController),
 		metaDB:          metaDB,
 		// first we sync from remote (using containers/image copy from docker:// to oci:) to a temp imageStore
 		// then we copy the image from tempStorage to zot's storage using ImageStore APIs
-		log: log,
+		log:              log,
+		desiredPlatforms: map[string]struct{}{},
 	}
+
+	for _, p := range desiredPlatforms {
+		dstReg.desiredPlatforms[p] = struct{}{}
+	}
+
+	return dstReg
 }
 
 // Check if image is already synced.
@@ -57,7 +68,7 @@ func (registry *DestinationRegistry) CanSkipImage(repo, tag string, digest godig
 	// check image already synced
 	imageStore := registry.storeController.GetImageStore(repo)
 
-	_, localImageManifestDigest, _, err := imageStore.GetImageManifest(repo, tag)
+	manifestBytes, localImageManifestDigest, manifestType, err := imageStore.GetImageManifest(repo, tag)
 	if err != nil {
 		if errors.Is(err, zerr.ErrRepoNotFound) || errors.Is(err, zerr.ErrManifestNotFound) {
 			return false, nil
@@ -76,6 +87,77 @@ func (registry *DestinationRegistry) CanSkipImage(repo, tag string, digest godig
 			Msg("remote image digest changed, syncing again")
 
 		return false, nil
+	}
+
+	/*
+		Since Zot creates new index manifests from the upstream index manifests,
+		comparing digests is not enough, for users could have added or deleted
+		desired platforms in the meantime. Zot needs to check whether what is now
+		desired is still on the partial manifest index manifests list.
+
+		If the `dev.zotregistry.image.original-digest` is not found, it means
+		manifest is not partial manifest, hence further check is skipped.
+
+		If the `dev.zotregistry.image.original-digest` is found, but desired
+		platforms list is now empty, it means all platforms are desired now, hence
+		false gets returned.
+
+		If the `dev.zotregistry.image.original-digest` is found and desired
+		platforms list is not empty, these platforms get checked against the ones
+		currently offered by the partial manifests and if some are missing false
+		is returned.
+
+		Otherwise true is returned.
+	*/
+	if manifestType == ispec.MediaTypeImageIndex || manifestType == mediatype.Docker2ManifestList {
+		type manifestIndex struct {
+			Manifests   []ispec.Descriptor `json:"manifests"`
+			Annotations map[string]string  `json:"annotations,omitempty"`
+		}
+
+		var mIndex manifestIndex
+		if err = json.Unmarshal(manifestBytes, &mIndex); err != nil {
+			registry.log.Error().Err(err).Str("repo", repo).Str("reference", tag).
+				Str("localDigest", localImageManifestDigest.String()).
+				Msg("invalid JSON")
+
+			return false, err
+		}
+
+		if _, ok := mIndex.Annotations[constants.OriginalDigestAnnotation]; !ok {
+			registry.log.Info().Str("repo", repo).Str("reference", tag).
+				Str("localDigest", localImageManifestDigest.String()).
+				Msg("manifest is not partial manifest")
+
+			return true, nil
+		}
+
+		if len(registry.desiredPlatforms) == 0 {
+			registry.log.Info().Str("repo", repo).Str("reference", tag).
+				Str("localDigest", localImageManifestDigest.String()).
+				Str("platform", platform).
+				Msg("manifest is partial but now all platforms are desired, syncing again")
+
+			return false, nil
+		}
+
+		currentPlatforms := map[string]struct{}{}
+		for _, platformManifest := range mIndex.Manifests {
+			platform := platforms.Format(*platformManifest.Platform)
+
+			currentPlatforms[platform] = struct{}{}
+		}
+
+		for platform, _ := range registry.desiredPlatforms {
+			if _, ok := currentPlatforms[platform]; !ok {
+				registry.log.Info().Str("repo", repo).Str("reference", tag).
+					Str("localDigest", localImageManifestDigest.String()).
+					Str("platform", platform).
+					Msg("partial manifest does not contain desired platform, syncing again")
+
+				return false, nil
+			}
+		}
 	}
 
 	return true, nil
@@ -227,8 +309,20 @@ func (registry *DestinationRegistry) copyManifest(repo string, desc ispec.Descri
 			return err
 		}
 
+		filteredManifests := []ispec.Descriptor{}
+
 		for _, manifest := range indexManifest.Manifests {
 			reference := GetDescriptorReference(manifest)
+
+			platform := platforms.Format(*manifest.Platform)
+			if _, ok := registry.desiredPlatforms[platform]; !ok && len(registry.desiredPlatforms) > 0 {
+				registry.log.Debug().Str("repo", repo).Str("reference", reference).Str("platform", platform).
+					Msg("manifest not uploaded because platform is not on the desired list")
+
+				continue
+			}
+
+			filteredManifests = append(filteredManifests, manifest)
 
 			manifestBuf, err := tempImageStore.GetBlobContent(repo, manifest.Digest)
 			if err != nil {
@@ -252,6 +346,61 @@ func (registry *DestinationRegistry) copyManifest(repo string, desc ispec.Descri
 
 				return err
 			}
+		}
+
+		if len(filteredManifests) != len(indexManifest.Manifests) {
+			/*
+				The idea is to create a new partial index manifest that
+				contains only desired platforms, and which is annotated for the Zot,
+				so that it knows it does not deal with a "complete" manifest.
+
+				The reason behind this idea is as follow.
+
+				To not get all the platforms on syncing, the easiest way is to filter
+				them out when copying. The regclient keeps them in the manifest index
+				however. But keeping them in the manifest index will fail validation
+				on putting into storage. And without putting into storage this manifest
+				cannot be served from cache on subsequent requests. So manifest must
+				be put there.
+
+				It seems the only two options for doing so are to either disable
+				validation or put a copy of the manifest with only selected platforms.
+				Validation seems important, especially there seems no reason for
+				the just copied platform-specific manifests to not undergoe this
+				process. Also skipping the validation seems more complicated for it
+				requires more changes in Zot as a registry.
+
+				That is why second approach is tried out here. Manifests list is
+				modified here, by replacing it with only the platforms that were copied,
+				so that the entire manifest index passes validation. This step is what
+				creates a new partial index manifest.
+
+				However, filtering out manifests changes the manifest index digest,
+				and hence it still would not be served from the cache due to failing
+				on comparison to the upstream registry's digest (in the step
+				that checks if image can be skipped on syncing).
+
+				Hence in addition, original digest gets preserved in the
+				`dev.zotregistry.image.original-digest` annotation for later comparisons.
+				It is to be used instead of the new digest of the partial index manifest.
+				This annotation is also what indicates the manifest is not the extact
+				index manifest as the one served by the upstream registry.
+			*/
+
+			indexManifest.Manifests = filteredManifests
+
+			if indexManifest.Annotations == nil {
+				indexManifest.Annotations = map[string]string{}
+			}
+
+			indexManifest.Annotations[constants.OriginalDigestAnnotation] = desc.Digest.String()
+
+			newManifestContent, err := json.Marshal(indexManifest)
+			if err != nil {
+				return err
+			}
+
+			manifestContent = newManifestContent
 		}
 
 		_, _, err := imageStore.PutImageManifest(repo, reference, desc.MediaType, manifestContent)

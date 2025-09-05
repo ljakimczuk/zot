@@ -36,4 +36,6 @@ const (
 	// log string keys.
 	// these can be used together with the logger to add context to a log message.
 	RepositoryLogKey = "repository"
+	// annotation for keeping original manifest digest on filtering out platforms.
+	OriginalDigestAnnotation = "dev.zotregistry.image.original-digest"
 )

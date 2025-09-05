@@ -141,7 +141,7 @@ tag patterns uses regex
                         "patterns": ["v2.*", ".*-prod"] // if there is no rule then the default is to retain always, this tagRetention will retain all tags matching the regexes in the patterns list.
                     },
                     {
-                        "patterns": ["v3.*", ".*-prod"], 
+                        "patterns": ["v3.*", ".*-prod"],
                         "pulledWithin": "168h"          // will keep v3.* and .*-prod tags that are pulled within last 168h
                     }]
                 },                                      // all tags under infra/* and prod/* will be removed! because they don't match any retention policy
@@ -395,7 +395,7 @@ user@host:~/zot$ cat ../keys  | jq
 }
 ```
 
-- hashKey  -  used to authenticate the cookie value using HMAC. It is recommended to use a key with exactly 32 or 64 bytes. 
+- hashKey  -  used to authenticate the cookie value using HMAC. It is recommended to use a key with exactly 32 or 64 bytes.
 - encryptKey - this is optional, used to encrypt the cookie value. If set, the length must correspond to the block size of the encryption algorithm. For AES, used by default, valid lengths are 16, 24, or 32 bytes to select AES-128, AES-192, or AES-256.
 
 If at least hashKey is not set zot will create a random one which on zot restarts it will invalidate all currently valid cookies and their sessions, requiring all users to login again.
@@ -503,7 +503,7 @@ Get list of API keys for the current user using the REST API
 **Example cURL**
 
 ```bash
-curl -u user:password -X GET http://localhost:8080/auth/apikey 
+curl -u user:password -X GET http://localhost:8080/auth/apikey
 ```
 
 **Sample output**:
@@ -770,7 +770,7 @@ The following AWS policy is required by zot for push and pull. Make sure to repl
 
 ### Specifying S3 credentials
 
-- Config file: 
+- Config file:
 
 ```
     "storage": {
@@ -1016,6 +1016,18 @@ Configure each registry sync:
 		}
 ```
 Prefixes can be strings that exactly match repositories or they can be [glob](https://en.wikipedia.org/wiki/Glob_(programming)) patterns.
+
+### Platform Filtering in Sync
+
+You can selectively sync multi-architecture images by specifying which platforms to include, for example:
+
+```
+"platforms": ["linux/amd64", "linux/arm64", "linux/arm/v7"]
+```
+
+This would sync only manifests for Linux AMD64, Linux ARM64, and Linux ARM v7 architectures, saving bandwidth and storage by excluding other architectures and variants.
+
+Platform specifiers must be in the format `<os>[(<OSVersion>)]|<arch>|<os>[(<OSVersion>)]/<arch>[/<variant>]`. **The minimum required information for a platform specifier is the operating system AND architecture.**
 
 ### Sync's certDir option
 

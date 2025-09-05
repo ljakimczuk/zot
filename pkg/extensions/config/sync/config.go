@@ -34,6 +34,7 @@ type RegistryConfig struct {
 	OnlySigned       *bool
 	CredentialHelper string
 	PreserveDigest   bool // sync without converting
+	Platforms        []string
 }
 
 type Content struct {
