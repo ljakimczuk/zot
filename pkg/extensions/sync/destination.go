@@ -68,7 +68,7 @@ func (registry *DestinationRegistry) CanSkipImage(repo, tag string, digest godig
 	// check image already synced
 	imageStore := registry.storeController.GetImageStore(repo)
 
-	_, localImageManifestDigest, _, err := imageStore.GetImageManifest(repo, tag)
+	manifestBytes, localImageManifestDigest, manifestType, err := imageStore.GetImageManifest(repo, tag)
 	if err != nil {
 		if errors.Is(err, zerr.ErrRepoNotFound) || errors.Is(err, zerr.ErrManifestNotFound) {
 			return false, nil
@@ -87,6 +87,48 @@ func (registry *DestinationRegistry) CanSkipImage(repo, tag string, digest godig
 			Msg("remote image digest changed, syncing again")
 
 		return false, nil
+	}
+
+	if manifestType == ispec.MediaTypeImageIndex || manifestType == mediatype.Docker2ManifestList {
+		type manifestIndex struct {
+			Manifests   []ispec.Descriptor `json:"manifests"`
+			Annotations map[string]string  `json:"annotations,omitempty"`
+		}
+
+		var mIndex manifestIndex
+		if err = json.Unmarshal(manifestBytes, &mIndex); err != nil {
+			registry.log.Error().Err(err).Str("repo", repo).Str("reference", tag).
+				Str("localDigest", localImageManifestDigest.String()).
+				Msg("invalid JSON")
+
+			return false, err
+		}
+
+		if _, ok := mIndex.Annotations[constants.OriginalDigestAnnotation]; !ok {
+			registry.log.Info().Str("repo", repo).Str("reference", tag).
+				Str("localDigest", localImageManifestDigest.String()).
+				Msg("manifest is not partial manifest and can be skipped")
+
+			return true, nil
+		}
+
+		currentPlatforms := map[string]struct{}{}
+		for _, platformManifest := range mIndex.Manifests {
+			platform := platforms.Format(*platformManifest.Platform)
+
+			currentPlatforms[platform] = struct{}{}
+		}
+
+		for platform, _ := range registry.desiredPlatforms {
+			if _, ok := currentPlatforms[platform]; !ok {
+				registry.log.Info().Str("repo", repo).Str("reference", tag).
+					Str("localDigest", localImageManifestDigest.String()).
+					Str("platform", platform).
+					Msg("partial manifest does not contain desired platform and cannot be skipped")
+
+				return false, nil
+			}
+		}
 	}
 
 	return true, nil
