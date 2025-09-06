@@ -186,4 +186,5 @@ var (
 	ErrInvalidEventSinkType             = errors.New("invalid sink type")
 	ErrEventSinkAddressEmpty            = errors.New("address field cannot be empty")
 	ErrCouldNotCreateHTTPEventTransport = errors.New("default transport is not *http.Transport")
+	ErrPlatformMissingOsOrArch          = errors.New("platform specifier misses operating system or architecture")
 )
