@@ -89,6 +89,26 @@ func (registry *DestinationRegistry) CanSkipImage(repo, tag string, digest godig
 		return false, nil
 	}
 
+	/*
+		Since Zot creates new index manifests from the upstream index manifests,
+		comparing digests is not enough, for users could have added or deleted
+		desired platforms in the meantime. Zot needs to check whether what is now
+		desired is still on the partial manifest index manifests list.
+
+		If the `dev.zotregistry.image.original-digest` is not found, it means
+		manifest is not partial manifest, hence further check is skipped.
+
+		If the `dev.zotregistry.image.original-digest` is found, but desired
+		platforms list is now empty, it means all platforms are desired now, hence
+		false gets returned.
+
+		If the `dev.zotregistry.image.original-digest` is found and desired
+		platforms list is not empty, these platforms get checked against the ones
+		currently offered by the partial manifests and if some are missing false
+		gets returned.
+
+		Otherwise it is true.
+	*/
 	if manifestType == ispec.MediaTypeImageIndex || manifestType == mediatype.Docker2ManifestList {
 		type manifestIndex struct {
 			Manifests   []ispec.Descriptor `json:"manifests"`
@@ -110,6 +130,10 @@ func (registry *DestinationRegistry) CanSkipImage(repo, tag string, digest godig
 				Msg("manifest is not partial manifest and can be skipped")
 
 			return true, nil
+		}
+
+		if len(registry.desiredPlatforms) == 0 {
+			return false, nil
 		}
 
 		currentPlatforms := map[string]struct{}{}
@@ -321,14 +345,21 @@ func (registry *DestinationRegistry) copyManifest(repo string, desc ispec.Descri
 
 		if len(filteredManifests) != len(indexManifest.Manifests) {
 			/*
-				When some platforms got filtered out on copying, keeping them in
-				the manifest index will fail validation on putting into storage.
-				And without putting into storage this manifest cannot be served from
-				cache on subsequent requests. So manifest must be put there.
+				The idea is to create a new partial index manifest that
+				contains only desired platforms, and which is annotated for Zot
+				so that it knows it is not a "complete" manifest that is known to
+				upstream registry.
+
+				The reasoning behind this idea is as follow. To not get all the
+				platforms, the easiest way is to filter them out on copying. In such
+				case however, keeping them in the manifest index will fail validation
+				on putting into storage. And without putting into storage this manifest
+				cannot be served from cache on subsequent requests. So manifest must
+				be put there.
 
 				That is why manifests list is modified here, to pass the validation,
 				for only the platforms that got copied are on the list and hence get
-				validated.
+				validated. This step is what creates a new partial index manifest.
 
 				However, filtering out manifests changes the manifest index digest,
 				and hence it still would not be served from the cache due to failing
@@ -337,7 +368,9 @@ func (registry *DestinationRegistry) copyManifest(repo string, desc ispec.Descri
 
 				Hence in addition original digest gets preserved in the
 				`dev.zotregistry.image.original-digest` annotation for later comparisons.
-				It is to be used instead of the new digest of "partial" index manifest.
+				It is to be used instead of the new digest of the partial index manifest.
+				This annotation is what indicates the manifest may not be the extact
+				index manifest as the one served by the upstream registry.
 			*/
 
 			indexManifest.Manifests = filteredManifests
