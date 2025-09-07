@@ -135,7 +135,6 @@ func (registry *DestinationRegistry) CanSkipImage(repo, tag string, digest godig
 		if len(registry.desiredPlatforms) == 0 {
 			registry.log.Info().Str("repo", repo).Str("reference", tag).
 				Str("localDigest", localImageManifestDigest.String()).
-				Str("platform", platform).
 				Msg("manifest is partial but now all platforms are desired, syncing again")
 
 			return false, nil
@@ -397,6 +396,8 @@ func (registry *DestinationRegistry) copyManifest(repo string, desc ispec.Descri
 
 			newManifestContent, err := json.Marshal(indexManifest)
 			if err != nil {
+				registry.log.Error().Str("errorType", common.TypeOf(err)).Err(err).Str("repo", repo).
+					Str("reference", reference).Msg("failed to marshal updated index manifest")
 				return err
 			}
 

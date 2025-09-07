@@ -18,6 +18,7 @@ import (
 	guuid "github.com/gofrs/uuid"
 	godigest "github.com/opencontainers/go-digest"
 	ispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/regclient/regclient/types/mediatype"
 
 	zerr "zotregistry.dev/zot/errors"
 	"zotregistry.dev/zot/pkg/api/constants"
@@ -597,6 +598,26 @@ func (is *ImageStore) PutImageManifest(repo, reference, mediaType string, //noli
 		desc.Annotations = map[string]string{ispec.AnnotationRefName: reference}
 	}
 
+	origDigest := mDigest.String()
+
+	if mediaType == ispec.MediaTypeImageIndex || mediaType == mediatype.Docker2ManifestList {
+		type manifestIndex struct {
+			Annotations map[string]string  `json:"annotations,omitempty"`
+		}
+
+		var mIndex manifestIndex
+		if err = json.Unmarshal(body, &mIndex); err != nil {
+			is.log.Error().Err(err).Str("repo", repo).Str("reference", reference).
+				Msg("failed to unmarshal index manifest for getting annotations")
+
+			return "", "", err
+		}
+
+		if v, ok := mIndex.Annotations[constants.OriginalDigestAnnotation]; ok {
+			origDigest = v
+		}
+	}
+
 	var subjectDigest godigest.Digest
 
 	artifactType := ""
@@ -650,6 +671,18 @@ func (is *ImageStore) PutImageManifest(repo, reference, mediaType string, //noli
 
 			return "", "", err
 		}
+	}
+
+	if index.Annotations != nil {
+		delete(index.Annotations, fmt.Sprintf("%s.%s",constants.DigestsMappingAnnotation, oldDgst.String()))
+	}
+
+	if origDigest != mDigest.String() {
+		if index.Annotations == nil {
+			index.Annotations = map[string]string{}
+		}
+
+		index.Annotations[fmt.Sprintf("%s.%s",constants.DigestsMappingAnnotation,mDigest.String())] = origDigest
 	}
 
 	err = common.UpdateIndexWithPrunedImageManifests(is, &index, repo, desc, oldDgst, is.log)

@@ -21,6 +21,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v5"
 
 	zerr "zotregistry.dev/zot/errors"
+	"zotregistry.dev/zot/pkg/api/constants"
 	zcommon "zotregistry.dev/zot/pkg/common"
 	"zotregistry.dev/zot/pkg/compat"
 	"zotregistry.dev/zot/pkg/extensions/monitoring"
@@ -663,6 +664,13 @@ func GetReferrers(imgStore storageTypes.ImageStore, repo string, gdigest godiges
 	index, err := GetIndex(imgStore, repo, log)
 	if err != nil {
 		return nilIndex, err
+	}
+
+	if index.Annotations != nil {
+		annotation := fmt.Sprintf("%s.%s",constants.DigestsMappingAnnotation, gdigest.String())
+		if v, ok := index.Annotations[annotation]; ok {
+			gdigest = godigest.Digest(v)
+		}
 	}
 
 	result := []ispec.Descriptor{}
